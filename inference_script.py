@@ -1,59 +1,43 @@
-from typing import List
+from typing import Dict, Tuple
 
 import cv2
-
-from onnx_base import OnnxBase
+from loguru import logger
+import random
+from data_models.images_input import Images
 import numpy as np
 
+from data_models.onnx_object_detection import OnnxObjectDetection
+from utils.visualization import write_to_disk
 
-class YoloV7(OnnxBase):
+yolo_classnames = ['person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus', 'train', 'truck', 'boat', 'traffic light',
+         'fire hydrant', 'stop sign', 'parking meter', 'bench', 'bird', 'cat', 'dog', 'horse', 'sheep', 'cow',
+         'elephant', 'bear', 'zebra', 'giraffe', 'backpack', 'umbrella', 'handbag', 'tie', 'suitcase', 'frisbee',
+         'skis', 'snowboard', 'sports ball', 'kite', 'baseball bat', 'baseball glove', 'skateboard', 'surfboard',
+         'tennis racket', 'bottle', 'wine glass', 'cup', 'fork', 'knife', 'spoon', 'bowl', 'banana', 'apple',
+         'sandwich', 'orange', 'broccoli', 'carrot', 'hot dog', 'pizza', 'donut', 'cake', 'chair', 'couch',
+         'potted plant', 'bed', 'dining table', 'toilet', 'tv', 'laptop', 'mouse', 'remote', 'keyboard', 'cell phone',
+         'microwave', 'oven', 'toaster', 'sink', 'refrigerator', 'book', 'clock', 'vase', 'scissors', 'teddy bear',
+         'hair drier', 'toothbrush']
 
-    def __init__(self, weight_path: str):
-        super().__init__(weight_path=weight_path)
-        # self.classnames = classnames
+yolo_colors: Dict[str, Tuple[int, int, int]] = {cls_name: [random.randint(0, 255) for _ in range(3)] for k, cls_name in
+                                                enumerate(yolo_classnames)}
 
-    def predict_ocr(self, input_data: np.ndarray):
-        return self.predict(input_data)[0]
-
-
-def letterbox(im, new_shape=(640, 640), color=(114, 114, 114), auto=True, scaleup=True, stride=32):
-    # Resize and pad image while meeting stride-multiple constraints
-    shape = im.shape[:2]  # current shape [height, width]
-    if isinstance(new_shape, int):
-        new_shape = (new_shape, new_shape)
-
-    # Scale ratio (new / old)
-    r = min(new_shape[0] / shape[0], new_shape[1] / shape[1])
-    if not scaleup:  # only scale down, do not scale up (for better val mAP)
-        r = min(r, 1.0)
-
-    # Compute padding
-    new_unpad = int(round(shape[1] * r)), int(round(shape[0] * r))
-    dw, dh = new_shape[1] - new_unpad[0], new_shape[0] - new_unpad[1]  # wh padding
-
-    if auto:  # minimum rectangle
-        dw, dh = np.mod(dw, stride), np.mod(dh, stride)  # wh padding
-
-    dw /= 2  # divide padding into 2 sides
-    dh /= 2
-
-    if shape[::-1] != new_unpad:  # resize
-        im = cv2.resize(im, new_unpad, interpolation=cv2.INTER_LINEAR)
-    top, bottom = int(round(dh - 0.1)), int(round(dh + 0.1))
-    left, right = int(round(dw - 0.1)), int(round(dw + 0.1))
-    im = cv2.copyMakeBorder(im, top, bottom, left, right, cv2.BORDER_CONSTANT, value=color)  # add border
-    return im, r, (dw, dh)
-
+yolov7_tiny = "/Users/anwesh.marwade@pon.com/Downloads/yolo/yolov7-tiny-dynamic-batch.onnx"
+input_folder = "/Users/anwesh.marwade@pon.com/Downloads/yolo/images"
+output_folder = "/Users/anwesh.marwade@pon.com/Downloads/test_op"
 
 if __name__ == '__main__':
-    yolov7 = YoloV7(weight_path="/Users/anwesh.marwade@pon.com/Downloads/yolo/yolov7-tiny.onnx")
-    image = cv2.imread("/Users/anwesh.marwade@pon.com/Downloads/horses.jpeg")
-    image, ratio, dwdh = letterbox(image, auto=False)
-    image = image.transpose((2, 0, 1))
-    image = np.expand_dims(image, 0)
-    image = np.ascontiguousarray(image)
 
-    im = image.astype(np.float32)
-    im /= 255
-    raw_out = yolov7.predict(input_data=im)
-    print('done')
+    yolov7 = OnnxObjectDetection(weight_path=yolov7_tiny, classnames=yolo_classnames)
+
+    images = Images(images=Images.read_from_folder(path=input_folder, ext="jpg"))
+
+    for i, batch in enumerate(images.create_batch(batch_size=4)):
+        logger.info(f"Processing batch: {i} containing {len(batch)} image(s)...")
+
+        raw_out = yolov7.predict_object_detection(input_data=batch.to_onnx_input(image_size=yolov7.input_size))
+        batch.init_detected_objects(raw_out)
+
+        annotations = batch.annotate_objects(input_size=yolov7.input_size, letterboxed_image=True, class_colors=yolo_colors)
+        write_to_disk(path=output_folder, images=annotations,
+                             names=batch.get_image_ids())
